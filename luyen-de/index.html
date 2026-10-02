@@ -359,6 +359,11 @@
   .quiz-opt.correct{ border-color:var(--success); background:var(--success-tint); color:var(--success); font-weight:600; }
   .quiz-opt.wrong{ border-color:var(--vermillion); background:var(--vermillion-tint); color:var(--vermillion); }
   .quiz-explain{ margin-top:.9rem; padding:.85rem 1rem; border-radius:10px; background:var(--gold-tint); color:var(--ink); font-size:.87rem; line-height:1.65; }
+  .quiz-word{ cursor:pointer; border-bottom:1.5px dotted var(--accent-soft); border-radius:3px; transition:background .12s ease; }
+  .quiz-word:hover, .quiz-word:active{ background:var(--accent-tint); }
+  .quiz-word-popup{ display:flex; align-items:flex-start; justify-content:space-between; gap:.6rem; margin:-.2rem 0 .8rem; padding:.65rem .85rem; border-radius:10px; background:var(--accent-tint); border:1px solid var(--accent-soft); color:var(--ink); font-size:.87rem; line-height:1.5; }
+  .quiz-word-popup button{ font:inherit; font-size:1rem; line-height:1; border:none; background:none; color:var(--ink-faint); cursor:pointer; padding:0 .1rem; flex:none; }
+  .quiz-word-popup button:hover{ color:var(--accent); }
   .quiz-history{ margin-top:1.4rem; }
   .quiz-history h4{ font-size:.85rem; color:var(--ink-faint); margin:0 0 .4rem; }
   .quiz-history ul{ list-style:none; margin:0; padding:0; font-size:.82rem; color:var(--ink-soft); display:flex; flex-direction:column; gap:.2rem; }
@@ -414,6 +419,7 @@
 
   var view = { mode: "home" };
   var activeQuiz = null; // { kind, questions, idx, score, selected, showFeedback, group? }
+  var wordPopup = null; // { word } — transient tập-to-see-gloss state for the vocabExam question sentence
 
   function pad(n){ return String(n).length < 2 ? "0" + n : String(n); }
   function esc(s){
@@ -502,6 +508,71 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
     if (qLine) return qLine;
     return choicesText;
   }
+  var VOCAB_QUESTION_STOPWORDS = { "から": 1, "よう": 1, "では": 1, "持ち": 1, "よく": 1, "かく": 1, "かけ": 1 }; // nghĩa gốc khác hẳn nghĩa thường gặp của chợ đó (đặp đồng âm), hoặc chỉ đúng với 1 câu đề cụ thể — không cho bật lên trong câu để tránh giải thích sai
+  function vocabQuestionScriptClass(ch){
+    var c = ch.charCodeAt(0);
+    if (c >= 0x3040 && c <= 0x309F) return "hira";
+    if (c >= 0x30A0 && c <= 0x30FF) return "kata";
+    return "other";
+  }
+  function vocabQuestionPureKanaClass(str){
+    var cls = vocabQuestionScriptClass(str[0]);
+    if (cls === "other") return null;
+    for (var k = 1; k < str.length; k++){ if (vocabQuestionScriptClass(str[k]) !== cls) return null; }
+    return cls;
+  }
+  function vocabQuestionIsBoundMorpheme(meaning){
+    // these glosses explicitly describe a suffix/prefix ("hậu tố"/"tiền tố") —
+    // a bound piece meant to attach to one specific word, not a freestanding
+    // meaning. Letting it light up as a tappable "word" inside an arbitrary
+    // sentence is the single biggest source of wrong glosses, so these never
+    // become clickable here (they still work fine for the answer-choice list).
+    return meaning.indexOf("hậu tố") !== -1 || meaning.indexOf("tiền tố") !== -1;
+  }
+  function vocabQuestionTokens(text){
+    var tokens = [];
+    var i = 0, n = text.length;
+    var MAXLEN = 10;
+    while (i < n){
+      var matched = null;
+      var maxTry = Math.min(MAXLEN, n - i);
+      for (var len = maxTry; len >= 2; len--){
+        var cand = text.substr(i, len);
+        var g = VOCAB_GLOSSARY[cand];
+        if (!g || VOCAB_QUESTION_STOPWORDS[cand] || vocabQuestionIsBoundMorpheme(g[2])) continue;
+        // a pure-kana match that's just a fragment of a longer continuous kana run
+        // (verb/adjective inflection chains, loanwords) is almost always the wrong
+        // word — only accept it at a real word boundary (script change, or start/end
+        // of the sentence). Kanji(-containing) matches don't need this: adjacent
+        // kanji compounds are normal Japanese orthography, not a fragment signal.
+        var kanaCls = vocabQuestionPureKanaClass(cand);
+        if (kanaCls){
+          var before = i > 0 ? text[i - 1] : null;
+          var after = (i + len) < n ? text[i + len] : null;
+          if (before && vocabQuestionScriptClass(before) === kanaCls) continue;
+          if (after && vocabQuestionScriptClass(after) === kanaCls) continue;
+        }
+        matched = cand;
+        break;
+      }
+      if (matched){
+        tokens.push({ word: matched });
+        i += matched.length;
+      } else {
+        var last = tokens[tokens.length - 1];
+        if (last && last.word === undefined) last.text += text[i];
+        else tokens.push({ text: text[i] });
+        i += 1;
+      }
+    }
+    return tokens;
+  }
+  function vocabQuestionHTML(text){
+    return vocabQuestionTokens(text).map(function(t){
+      if (t.word === undefined) return esc(t.text);
+      return '<span class="quiz-word" data-word="' + esc(t.word) + '">' + esc(t.word) + '</span>';
+    }).join("");
+  }
   function vocabExamPool(lesson){
     var list = state.materials.vocabExam || [];
     if (lesson) list = list.filter(function(it){ return String(it.lesson) === String(lesson); });
@@ -522,6 +593,7 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
   }
   function startVocabExamQuiz(size, lesson){
     activeQuiz = { kind: "vocabExam", group: lesson || "", questions: buildVocabExamQuiz(size, lesson), idx: 0, score: 0, selected: null, showFeedback: false };
+    wordPopup = null;
     view = { mode: "quizVocabExam", stage: "active" };
     renderApp();
   }
@@ -925,6 +997,7 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
   function nextQuizQuestion(){
     var qz = activeQuiz;
     if (!qz) return;
+    wordPopup = null;
     qz.idx++;
     qz.selected = null;
     qz.showFeedback = false;
@@ -976,12 +1049,23 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
     var passageHTML = q.passage ? '<div class="quiz-passage">' + esc(q.passage) + '</div>' : "";
     var tagHTML = q.sectionTag ? '<p class="quiz-question-label">' + esc(q.sectionTag) + '</p>' : "";
     var explHTML = (qz.showFeedback && q.explanation) ? '<div class="quiz-explain"><strong>Giải thích:</strong><br>' + esc(q.explanation).replace(/\n/g, "<br>") + '</div>' : "";
+    var questionHTML = (qz.kind === "vocabExam") ? vocabQuestionHTML(q.q) : esc(q.q);
+    var wordPopupHTML = "";
+    if (qz.kind === "vocabExam" && wordPopup){
+      var wg = VOCAB_GLOSSARY[wordPopup.word];
+      if (wg){
+        var wReading = wg[1], wMeaning = wg[2];
+        var wLabel = (wReading && wReading !== wordPopup.word) ? (wordPopup.word + "【" + wReading + "】") : wordPopup.word;
+        wordPopupHTML = '<div class="quiz-word-popup"><span>' + esc(wLabel) + ": " + esc(wMeaning) + '</span><button type="button" data-word-close aria-label="Đóng">×</button></div>';
+      }
+    }
     return '<section class="quiz-view">' +
       '<div class="section-title"><h2>' + esc(quizKindLabel(qz.kind)) + '</h2>' +
         '<span class="quiz-progress">Câu ' + (qz.idx + 1) + '/' + qz.questions.length + ' · Đúng ' + qz.score + '</span></div>' +
       tagHTML +
       passageHTML +
-      '<p class="quiz-question">' + esc(q.q) + '</p>' +
+      '<p class="quiz-question">' + questionHTML + '</p>' +
+      wordPopupHTML +
       '<div class="quiz-opts">' + optsHTML + '</div>' +
       explHTML +
       (qz.showFeedback ? '<button type="button" class="btn-primary" data-quiz-next>' + (qz.idx + 1 < qz.questions.length ? "Câu tiếp →" : "Xem kết quả") + '</button>' : "") +
@@ -1165,6 +1249,18 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
     var mockExamBtn = e.target.closest("[data-mock-exam]");
     if (mockExamBtn){
       startMockExamQuiz(parseInt(mockExamBtn.getAttribute("data-mock-exam"), 10));
+      return;
+    }
+    var wordSpan = e.target.closest("[data-word]");
+    if (wordSpan){
+      var w = wordSpan.getAttribute("data-word");
+      wordPopup = (wordPopup && wordPopup.word === w) ? null : { word: w };
+      renderApp();
+      return;
+    }
+    if (e.target.closest("[data-word-close]")){
+      wordPopup = null;
+      renderApp();
       return;
     }
     var optBtn = e.target.closest("[data-quiz-opt]");
