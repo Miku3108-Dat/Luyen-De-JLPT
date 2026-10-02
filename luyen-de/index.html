@@ -401,6 +401,10 @@
   .home-card-title{ font-family:var(--font-display); font-size:1.05rem; color:var(--ink); }
   .home-card-sub{ font-size:.82rem; color:var(--ink-soft); }
   .home-card-last{ font-family:var(--font-mono); font-size:.78rem; color:var(--accent); margin-top:.2rem; }
+  .home-card-progress{ display:flex; flex-direction:column; gap:.25rem; margin-top:.15rem; }
+  .home-card-progress-track{ height:6px; border-radius:3px; background:var(--surface-2); overflow:hidden; }
+  .home-card-progress-track > span{ display:block; height:100%; background:var(--accent); border-radius:3px; transition:width .25s ease; }
+  .home-card-progress-label{ font-size:.76rem; color:var(--ink-soft); font-family:var(--font-mono); }
 </style>
 <div id="app"></div>
 
@@ -540,7 +544,8 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
         correctIdx: it.answerIdx,
         sectionTag: it.lessonName + (it.problemLabel ? " · " + it.problemLabel + " #" + it.itemNum : ""),
         explanation: vocabExplainText(it.question, it.choices, it.answerIdx),
-        qSeg: it.qSeg
+        qSeg: it.qSeg,
+        id: it.id
       };
     });
   }
@@ -587,7 +592,8 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
     return picks.map(function(it){
       return {
         q: it.question, options: it.choices, correctIdx: it.answerIdx, passage: it.passage || null,
-        sectionTag: "第" + it.week + "週 · " + (KANJIPRACTICE_PROBLEM_LABEL[it.problemNum] || ("問題" + it.problemNum)) + " #" + it.itemNum
+        sectionTag: "第" + it.week + "週 · " + (KANJIPRACTICE_PROBLEM_LABEL[it.problemNum] || ("問題" + it.problemNum)) + " #" + it.itemNum,
+        id: it.id
       };
     });
   }
@@ -623,7 +629,7 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
     var pool = grammarSentencePool();
     var picks = sample(pool, size);
     return picks.map(function(it){
-      return { q: it.sentence, options: it.choices, correctIdx: it.answerIdx, sectionTag: "文法 (câu ví dụ đề thi thật)" };
+      return { q: it.sentence, options: it.choices, correctIdx: it.answerIdx, sectionTag: "文法 (câu ví dụ đề thi thật)", id: it.id };
     });
   }
   function startGrammarSentenceQuiz(size){
@@ -664,7 +670,8 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
     return picks.map(function(it){
       return {
         q: it.question, options: it.choices, correctIdx: it.answerIdx, passage: it.passage || null,
-        sectionTag: "Step" + it.step + " 第" + it.setNum + "回 · " + (GRAMMARPRACTICE_PROBLEM_LABEL[it.problemNum] || ("問題" + it.problemNum)) + " #" + it.itemNum
+        sectionTag: "Step" + it.step + " 第" + it.setNum + "回 · " + (GRAMMARPRACTICE_PROBLEM_LABEL[it.problemNum] || ("問題" + it.problemNum)) + " #" + it.itemNum,
+        id: it.id
       };
     });
   }
@@ -710,7 +717,7 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
     var pool = readingPool(group);
     var picks = sample(pool, size);
     return picks.map(function(it){
-      return { passage: it.passage, q: it.question, options: it.choices, correctIdx: it.correct - 1, explanation: it.explanation };
+      return { passage: it.passage, q: it.question, options: it.choices, correctIdx: it.correct - 1, explanation: it.explanation, id: it.id };
     });
   }
   function startReadingQuiz(size, group){
@@ -800,7 +807,8 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
         correctIdx: correctIdx,
         mcMode: choices.length > 0 && correctIdx !== null,
         answerRaw: it.answer || "",
-        explanation: it.explanation || ""
+        explanation: it.explanation || "",
+        id: it.id
       };
     });
   }
@@ -879,6 +887,7 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
     if (!qz || qz.showFeedback) return;
     qz.showFeedback = true;
     qz.selfPending = true;
+    markSeen("listening", qz.questions[qz.idx].id);
     renderApp();
   }
   function selfGradeListening(correct){
@@ -909,7 +918,8 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
     return list.map(function(it){
       return {
         q: it.question, options: it.choices, correctIdx: it.answerIdx, passage: it.passage || null,
-        sectionTag: "N2-" + it.examNum + " · " + (MOCKEXAM_PROBLEM_LABEL[it.problemNum] || ("問題" + it.problemNum)) + " #" + it.itemNum
+        sectionTag: "N2-" + it.examNum + " · " + (MOCKEXAM_PROBLEM_LABEL[it.problemNum] || ("問題" + it.problemNum)) + " #" + it.itemNum,
+        id: it.id
       };
     });
   }
@@ -936,12 +946,26 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
   // Shared quiz engine (answer/feedback/history) — same mechanics across
   // every skill area above.
   // ---------------------------------------------------------------------
+  function markSeen(kind, id){
+    if (!id) return;
+    state.progress.seen = state.progress.seen || {};
+    state.progress.seen[kind] = state.progress.seen[kind] || {};
+    if (!state.progress.seen[kind][id]){
+      state.progress.seen[kind][id] = 1;
+      scheduleSave();
+    }
+  }
+  function seenCount(kind){
+    var s = (state.progress.seen && state.progress.seen[kind]) || {};
+    return Object.keys(s).length;
+  }
   function selectQuizOpt(i){
     var qz = activeQuiz;
     if (!qz || qz.showFeedback) return;
     qz.selected = i;
     qz.showFeedback = true;
     if (i === qz.questions[qz.idx].correctIdx) qz.score++;
+    markSeen(qz.kind, qz.questions[qz.idx].id);
     renderApp();
   }
 
@@ -1042,15 +1066,24 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
     { mode: "quizListening", title: "Nghe hiểu", sub: "聴解 — 266 câu, audio thật", matKey: "listening" },
     { mode: "quizMockExam", title: "Đề thi đầy đủ", sub: "34 đề thật, ~75 câu/đề", matKey: "mockExams" }
   ];
+  var HOME_CARD_KIND = { quizVocabExam: "vocabExam", quizKanjiPractice: "kanjiPractice", quizGrammarSentence: "grammarSentence", quizGrammarPractice: "grammarPractice", quizReading: "reading", quizListening: "listening", quizMockExam: "mockExam" };
   function homeHTML(){
     var days = daysUntil(state.examDate);
     var cards = HOME_CARDS.map(function(c){
+      var kind = HOME_CARD_KIND[c.mode];
       var n = (state.materials[c.matKey] || []).length;
-      var hist = (state.progress.quiz[({ quizVocabExam: "vocabExam", quizKanjiPractice: "kanjiPractice", quizGrammarSentence: "grammarSentence", quizGrammarPractice: "grammarPractice", quizReading: "reading", quizListening: "listening", quizMockExam: "mockExam" })[c.mode]] || []).slice(-1)[0];
+      var done = Math.min(seenCount(kind), n);
+      var pct = n ? Math.round((done / n) * 100) : 0;
+      var hist = (state.progress.quiz[kind] || []).slice(-1)[0];
       var lastHTML = hist ? '<span class="home-card-last">Lần gần nhất: ' + hist.score + '/' + hist.total + '</span>' : '';
+      var progressHTML = '<div class="home-card-progress">' +
+        '<div class="home-card-progress-track"><span style="width:' + pct + '%"></span></div>' +
+        '<span class="home-card-progress-label">Đã học ' + done + '/' + n + ' (' + pct + '%)</span>' +
+      '</div>';
       return '<button type="button" class="home-card" data-nav="' + c.mode + '">' +
         '<span class="home-card-title">' + esc(c.title) + '</span>' +
         '<span class="home-card-sub">' + esc(c.sub) + '</span>' +
+        progressHTML +
         lastHTML +
       '</button>';
     }).join("");
@@ -1236,8 +1269,10 @@ var VOCAB_GLOSSARY = {"あいまいに":["曖昧","あいまい","mơ hồ, khô
   function initProgressDefaults(){
     state.progress = state.progress || {};
     state.progress.quiz = state.progress.quiz || {};
+    state.progress.seen = state.progress.seen || {};
     ["vocabExam", "kanjiPractice", "grammarSentence", "grammarPractice", "reading", "listening", "mockExam"].forEach(function(k){
       state.progress.quiz[k] = state.progress.quiz[k] || [];
+      state.progress.seen[k] = state.progress.seen[k] || {};
     });
   }
 
